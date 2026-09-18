@@ -1,45 +1,63 @@
 # 🧠⚡ Dual-Process AI
 
-**A design pattern that combines a near-zero-latency System 1 classifier with a deep-reasoning LLM, inspired by Daniel Kahneman's *Thinking, Fast and Slow*.**
+Route cheap decisions to a calibrated classifier. Send only the hard ones to an LLM.
 
-> "Don't send everything to an LLM. Fast brain + deep brain."
+> "Don't send everything to an LLM. Fast brain decides, deep brain thinks."
 
 ---
 
 ## 💡 The Idea
 
-Modern AI applications route **every** user request to a large language model — even trivial ones like "show server status" or "list repos". This wastes time, tokens, and money.
+Most AI applications send every request to a large language model — including trivial ones like "show server status" or "list repos". That is slow, expensive, and unnecessary.
 
-**Dual-Process AI** mirrors the human brain's two cognitive systems:
+Dual-Process AI splits the work along the lines Kahneman drew:
 
 | | System 1 (Fast) | System 2 (Slow) |
 |---|---|---|
 | **Kahneman** | Intuitive, automatic | Deliberate, analytical |
-| **AI Implementation** | [Jev](https://typesafe.ai) (TypeSafe AI) | Gemini 3.8 Flash |
-| **Latency** | 0.01 ms | 500–5000 ms |
-| **Cost** | $0 | Token-based |
+| **Implementation** | [Jev](https://typesafe.ai) (TypeSafe AI) | Gemini 3.8 Flash |
+| **Output** | Typed decision + confidence | Free-form text |
+| **Latency** | ~70–500 ms | 500–5000 ms |
+| **Input cost** | $0.042 / 1M tokens (output free) | Standard token pricing |
 | **Use case** | Routing, classification, safety gates | Reasoning, code generation, analysis |
+
+The key mechanism is not speed — it is **calibrated confidence**.
+
+Jev is trained with RLCD (Reinforcement Learning for Calibrated Decisions), which optimizes probability calibration against verifiable ground truth rather than human preference. That means the confidence score it returns can actually be used as a threshold. An RLHF-trained LLM asked "how sure are you?" gives a number shaped by what humans like to hear; Jev gives a number you can put in an `if` statement.
+
+That single property is what makes the whole pattern work:
+
+```
+confidence >= THRESHOLD  →  System 1 decides, done
+confidence <  THRESHOLD  →  escalate to System 2
+```
 
 ```
 User Input
     │
     ▼
-┌──────────────────────┐
-│  System 1 (Jev)      │  ← 0.01ms, $0
-│  Route / Classify    │
-└──────────┬───────────┘
+┌────────────────────────────┐
+│  System 1 (Jev)            │
+│  typed decision + conf.    │
+└──────────┬─────────────────┘
            │
-     ┌─────┴─────┐
-     │           │
-  Routine    Thinking
-  Task       Required
-     │           │
-     ▼           ▼
-┌─────────┐ ┌──────────────────┐
-│ Direct  │ │  System 2 (LLM)  │  ← Deep reasoning
-│ Execute │ │  Gemini 3.8 Flash│
-└─────────┘ └──────────────────┘
+   ┌───────┴────────┐
+ conf ≥ τ        conf < τ
+   │                │
+   ▼                ▼
+┌─────────┐  ┌──────────────────┐
+│ Direct  │  │  System 2 (LLM)  │
+│ Execute │  │  Gemini 3.8 Flash│
+└─────────┘  └──────────────────┘
 ```
+
+---
+
+## ⚠️ Status
+
+Jev was announced on 2026-09-15 and is currently in early-access behind a waitlist. Without an API key this repo runs in **degraded mode**: a keyword matcher stands in for System 1.
+
+Degraded mode is not an equivalent System 1. It produces no calibrated confidence, so threshold-based escalation is replaced by a conservative rule — anything not on the allowlist escalates. Treat the keyword path as a way to run the code, not as a claim about the pattern.
 
 ---
 
@@ -47,44 +65,27 @@ User Input
 
 | File | Description |
 |---|---|
-| `router.py` | Core Dual-Process router — Jev classifies, Gemini reasons |
-| `safety_gate.py` | PreToolUse hook for AI coding agents (e.g., Antigravity) — blocks dangerous commands in 0.01ms |
-| `discord_bot.py` | Discord bot with rich embed UI and short-term context memory |
+| `router.py` | Core router — System 1 classifies and scores, System 2 reasons |
+| `safety_gate.py` | PreToolUse hook for AI coding agents — blocks dangerous shell commands before execution |
+| `discord_bot.py` | Discord bot with rich embeds and short-term per-channel context |
 | `.env.example` | Template for API keys |
 
 ---
 
 ## 🚀 Quick Start
 
-### 1. Install dependencies
-
 ```bash
 pip install google-genai discord.py python-dotenv
-# Optional: pip install typesafe-sdk  (for Jev API mode)
-```
+# Optional, for the full System 1 path:
+pip install typesafe-sdk
 
-### 2. Configure environment
+cp .env.example .env    # add GEMINI_API_KEY, and TYPESAFE_API_KEY if you have one
 
-```bash
-cp .env.example .env
-# Edit .env with your API keys
-```
-
-### 3. Run the router
-
-```bash
 python router.py
-```
-
-### 4. Run the Discord bot
-
-```bash
 python discord_bot.py
 ```
 
-### 5. Use the safety gate (Antigravity / AI coding agents)
-
-Add to your hooks configuration:
+Hook configuration for AI coding agents:
 
 ```json
 {
@@ -100,93 +101,83 @@ Add to your hooks configuration:
 
 ---
 
-## 🏗️ Architecture Deep Dive
+## 🏗️ Architecture
 
 ### Router (`router.py`)
-
-The `DualProcessRouter` has two layers:
-
-1. **`JevClassifier`** — Instant intent classification using keyword matching (fallback) or [TypeSafe Jev API](https://typesafe.ai) (when API key is available). Returns an action and whether deep reasoning is needed.
-
-2. **`GeminiReasoner`** — Activated *only* when System 1 says `needs_reasoning = True`. Supports conversation history for multi-turn context.
 
 ```python
 from router import DualProcessRouter
 
-router = DualProcessRouter()
-result = router.process("What's the server status?")
-# → System 1 handles it instantly, no LLM call
+router = DualProcessRouter(threshold=0.85)
 
-result = router.process("Design a microservice architecture for this")
-# → System 1 routes to System 2, Gemini generates a thoughtful response
+router.process("What's the server status?")
+# → System 1, confidence 0.97, no LLM call
+
+router.process("Design a microservice architecture for this")
+# → confidence 0.31 → escalated to System 2
 ```
+
+`JevClassifier` sends the input plus a typed question set and gets back a choice and a confidence score in one pass. `GeminiReasoner` runs only on escalation, and receives conversation history so multi-turn dialogue stays coherent.
+
+The threshold is the one knob worth tuning. Lower it and you pay more but misroute less; raise it and the opposite. Pick it from your own escalation data, not from this README.
 
 ### Safety Gate (`safety_gate.py`)
 
-A reflexive guard that inspects shell commands **before** an AI agent executes them:
-
 ```
-rm -rf /        → ⚡ DENY (0.01ms)
-DROP DATABASE   → ⚡ DENY (0.01ms)
-fork bomb       → ⚡ DENY (0.01ms)
-echo hello      → ✅ ALLOW
-git status      → ✅ ALLOW
+rm -rf /        → DENY
+DROP DATABASE   → DENY
+fork bomb       → DENY
+echo hello      → ALLOW
+git status      → ALLOW
 ```
 
-Works as a standalone script or with the TypeSafe Jev API for enhanced detection.
+This is a guardrail, not a security boundary. The standalone path is a blocklist, and blocklists are bypassable by construction — variable expansion, base64, `find -delete`, aliases, and anything else that reaches the same syscall by a different spelling will pass. It exists to stop an agent from doing something stupid by accident, not to stop an adversary doing something malicious on purpose.
 
-### Discord Bot (`discord_bot.py`)
-
-A smartphone-optimized Discord bot with:
-- **Rich embed cards** — Color-coded server status, GitHub repos, Drive files
-- **Short-term context memory** — Remembers recent turns per channel
-- **Dual badge display** — Shows which system handled each request
-
----
-
-## 🔧 Configuration
-
-### Without Jev API (Keyword Fallback)
-
-Works out of the box. System 1 uses lightweight keyword matching for routing. Zero external dependencies beyond Gemini.
-
-### With Jev API (Full System 1)
-
-1. Get an API key from [TypeSafe AI Console](https://console.typesafe.ai)
-2. Add `TYPESAFE_API_KEY=your_key` to `.env`
-3. Install: `pip install typesafe-sdk`
-
-The router automatically detects and uses the Jev API when available.
+Routing a command through Jev raises the ceiling — TypeSafe's own demos cover prompt-injection resistance and PII detection, which is the same shape of problem — but does not turn this into a sandbox. Use a container for that.
 
 ---
 
 ## 🎯 Design Principles
 
-1. **LLM as last resort** — Don't invoke a billion-parameter model for a lookup table task
-2. **Fail-open** — If System 1 can't decide, escalate to System 2 (never block)
-3. **Cost-aware** — Track and display which system handled each request
-4. **Context-preserving** — System 2 receives conversation history for coherent multi-turn dialogue
-5. **Reflexive safety** — Dangerous commands are caught before the LLM even thinks
+1. **LLM as last resort** — don't invoke a frontier model for a lookup-table task.
+2. **Routing fails open** — low confidence escalates to System 2. The router never refuses.
+3. **Safety fails closed** — the gate is the one component that blocks. Unparseable input is denied, not passed.
+4. **Trust the number, not the vibe** — escalation is driven by a calibrated score, which is why the classifier choice matters.
+5. **Cost-aware** — every response reports which system handled it and what it cost.
 
 ---
 
 ## 📊 Performance
 
-Measured on a Sony VAIO (2-core, 3.7GB RAM):
+Measured on a Sony VAIO, 2 cores, 3.7 GB RAM — the point being that the fast path needs no local GPU and no local model.
 
-| Metric | System 1 Only | System 2 Engaged |
+| Metric | System 1 only | Escalated |
 |---|---|---|
-| Latency | 0.01–0.05 ms | 500–5000 ms |
-| API Cost | $0 | Token-based |
-| RAM | ~50 MB | ~50 MB (API call) |
+| **Latency (keyword, degraded)** | 0.01–0.05 ms | 500–5000 ms |
+| **Latency (Jev)** | 70–500 ms | + 500–5000 ms |
+| **RAM** | ~50 MB | ~50 MB |
+
+Routing accuracy is the metric that matters, and it is not measured yet. Latency and cost numbers are meaningless on their own: a router that answers instantly and answers wrong is worse than no router. The numbers this project needs, and does not yet have:
+
+- **misroute rate** — inputs handled directly that should have escalated
+- **escalation rate** — what fraction actually reaches System 2
+- **calibration** — measured Brier score of System 1 confidence on a held-out set
+
+A labelled set of ~100 representative inputs is enough to produce all three. Contributions welcome.
+
+---
+
+## 🔗 Prior Art
+
+Model routing and cascading are established ideas — RouteLLM, semantic-router, and LLM cascades all cover the same ground. What is new here is the classifier: a non-autoregressive model that returns a calibrated score in one pass makes confidence-threshold routing practical in a way that an embedding-similarity router or a small LLM judge does not.
 
 ---
 
 ## 🤝 Credits
 
-- [Kahneman, D. (2011). *Thinking, Fast and Slow*](https://en.wikipedia.org/wiki/Thinking,_Fast_and_Slow) — The cognitive science inspiration
-- [TypeSafe AI / Jev](https://typesafe.ai) — System 1 non-autoregressive classifier
-- [Google Gemini](https://ai.google.dev) — System 2 deep reasoning
+- Kahneman, D. (2011). *Thinking, Fast and Slow*
+- [TypeSafe AI / Jev](https://typesafe.ai) — System 1 classifier
+- [Google Gemini](https://ai.google.dev) — System 2 reasoning
 
 ---
 
