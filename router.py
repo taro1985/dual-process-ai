@@ -90,24 +90,23 @@ class JevClassifier:
                     state=f"User request: {user_input}",
                     questions={
                         "action": Choice(actions, "Which action best matches this request?"),
-                        "needs_reasoning": Noul(
-                            "Does this require creative writing, complex reasoning, or code generation?"
-                        ),
+                        "confidence": Score(0, 100, "How confident are you that this request should be directly handled by this action without deep reasoning? (0=not confident, 100=absolutely certain)"),
                         "urgency": Score(0, 5, "How urgent? 0=normal, 5=critical"),
                     }
                 )
+                conf_score = round(res.answers.confidence.value / 100.0, 2)
                 elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
                 return {
                     "source": "Jev API (TypeSafe AI)",
                     "action": res.answers.action.value,
-                    "needs_reasoning": res.answers.needs_reasoning.value,
+                    "confidence": conf_score,
                     "urgency": res.answers.urgency.value,
                     "latency_ms": elapsed_ms,
                 }
             except Exception as e:
                 print(f"[Jev API fallback: {e}]", file=sys.stderr)
 
-        # Keyword fallback (still 0.01ms)
+        # Keyword fallback (still 0.01ms, degraded mode)
         prompt_lower = user_input.lower()
         for rule in self.ROUTING_RULES.values():
             if any(kw in prompt_lower for kw in rule["keywords"]):
@@ -115,7 +114,7 @@ class JevClassifier:
                 return {
                     "source": "Jev Classifier (keyword fallback)",
                     "action": rule["action"],
-                    "needs_reasoning": rule["needs_reasoning"],
+                    "confidence": 0.95,
                     "urgency": 1,
                     "latency_ms": elapsed_ms,
                 }
@@ -125,7 +124,7 @@ class JevClassifier:
         return {
             "source": "Jev Classifier (keyword fallback)",
             "action": "llm_reasoning",
-            "needs_reasoning": True,
+            "confidence": 0.20,
             "urgency": 1,
             "latency_ms": elapsed_ms,
         }
@@ -189,24 +188,28 @@ class DualProcessRouter:
     Unified orchestrator combining System 1 (Jev) + System 2 (Gemini).
     
     Usage:
-        router = DualProcessRouter()
+        router = DualProcessRouter(threshold=0.85)
         result = router.process("What's the server status?")
-        # → System 1 instant route, no LLM call
+        # → System 1, confidence 0.95 >= 0.85, direct execution ($0)
         
-        result = router.process("Design a REST API for this service")
-        # → System 1 routes to System 2, Gemini generates response
+        result = router.process("Design a microservice architecture for this")
+        # → confidence 0.20 < 0.85 → escalated to System 2
     """
 
-    def __init__(self, tool_handlers: dict = None, system_instruction: str = None):
+    def __init__(self, tool_handlers: dict = None, system_instruction: str = None, threshold: float = 0.85):
         """
         Args:
             tool_handlers: Dict mapping action names to callable functions.
                            e.g. {"get_status": my_status_func, "list_repos": my_repos_func}
             system_instruction: Custom system prompt for the Gemini reasoner.
+            threshold: Calibrated confidence threshold (0.0 - 1.0).
+                       If confidence >= threshold, System 1 decides and executes.
+                       Otherwise, escalates to System 2 (Gemini).
         """
         self.system1 = JevClassifier()
         self.system2 = GeminiReasoner(system_instruction=system_instruction)
         self.tool_handlers = tool_handlers or {}
+        self.threshold = threshold
 
     def process(self, user_input: str, conversation_history: list = None) -> dict:
         """
@@ -216,6 +219,8 @@ class DualProcessRouter:
             {
                 "input": str,
                 "decision": { ... System 1 classification ... },
+                "confidence": float,
+                "threshold": float,
                 "system2_engaged": bool,
                 "total_latency_ms": float,
                 "output": str,
@@ -223,21 +228,23 @@ class DualProcessRouter:
         """
         total_start = time.perf_counter()
 
-        # --- System 1: Instant classification ---
+        # --- System 1: Instant classification & calibrated confidence ---
         decision = self.system1.classify(user_input)
         action = decision["action"]
+        confidence = decision.get("confidence", 0.0)
         system2_engaged = False
         output = ""
 
-        if action != "llm_reasoning" and action in self.tool_handlers:
+        # Routing decision: confidence >= threshold -> System 1, else escalate
+        if confidence >= self.threshold and action != "llm_reasoning" and action in self.tool_handlers:
             # Direct tool execution (no LLM needed)
             try:
                 output = self.tool_handlers[action](user_input)
             except Exception as e:
                 output = f"Tool execution error: {e}"
 
-        elif action == "llm_reasoning" or action not in self.tool_handlers:
-            # --- System 2: Deep reasoning ---
+        else:
+            # --- System 2: Escalate to deep reasoning ---
             system2_engaged = True
             output = self.system2.generate(user_input, conversation_history)
 
@@ -246,6 +253,8 @@ class DualProcessRouter:
         return {
             "input": user_input,
             "decision": decision,
+            "confidence": confidence,
+            "threshold": self.threshold,
             "system2_engaged": system2_engaged,
             "total_latency_ms": total_ms,
             "output": output,
@@ -273,7 +282,8 @@ def main():
         "list_repos": _demo_list_repos,
     }
 
-    router = DualProcessRouter(tool_handlers=handlers)
+    # Initialize router with a confidence threshold
+    router = DualProcessRouter(tool_handlers=handlers, threshold=0.85)
 
     test_cases = [
         "What's the server status?",
@@ -292,9 +302,9 @@ def main():
 
         print(f"⚡ System 1: {d['source']}")
         print(f"   Action: {d['action']}")
-        print(f"   Needs reasoning: {d['needs_reasoning']}")
+        print(f"   Confidence: {d['confidence']} (Threshold: {router.threshold})")
         print(f"   Latency: {d['latency_ms']} ms")
-        print(f"🧠 System 2 engaged: {'YES' if result['system2_engaged'] else 'NO ($0)'}")
+        print(f"🧠 System 2 engaged: {'YES (escalated)' if result['system2_engaged'] else 'NO ($0)'}")
         print(f"⏱️  Total: {result['total_latency_ms']} ms")
         print(f"📤 Output: {result['output'][:200]}")
 
