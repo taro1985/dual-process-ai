@@ -184,10 +184,8 @@ class GeminiReasoner:
     def generate(self, user_input: str, conversation_history: list = None, tools: list = None) -> str:
         """Generate a response using Gemini with optional conversation context and dynamic tool pruning."""
         self.last_pruned_tools = []
-        if not self.client:
-            return "Error: GEMINI_API_KEY is not configured."
 
-        # Dynamically prune tools using System 1 (<0.1ms)
+        # System 1: Dynamically prune tools first (<0.1ms, independent of LLM API key)
         genai_tools = None
         if tools and self.pruner and self.enable_tool_pruning:
             self.last_pruned_tools = self.pruner.prune(user_input, tools, top_k=3, min_score=0.15)
@@ -195,6 +193,9 @@ class GeminiReasoner:
                 genai_tools = self.pruner.to_genai_function_declarations(self.last_pruned_tools)
         elif tools:
             self.last_pruned_tools = tools
+
+        if not self.client:
+            return "Error: GEMINI_API_KEY is not configured."
 
         # Build multi-turn context
         contents = []
