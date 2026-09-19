@@ -72,7 +72,9 @@ Degraded mode is not an equivalent System 1. It produces no calibrated confidenc
 | `safety_gate.py`   | PreToolUse hook for AI coding agents — blocks dangerous shell commands before execution |
 | `hermes_gate.py`   | Autonomous agent integration hook for HermesAgent command execution loops               |
 | `memory_scorer.py` | Sub-millisecond episodic memory & context relevance scorer (JevMemoryScorer)            |
-| `tool_pruner.py`   | Sub-millisecond dynamic MCP tool selector / pruner for token efficiency & accuracy    |
+| `tool_pruner.py`   | Sub-millisecond dynamic MCP tool selector / pruner for token efficiency & accuracy      |
+| `demo_cli.py`      | Interactive terminal CLI demo showcasing Fast & Slow AI in real-time     |
+| `benchmark.py`     | Automated benchmark suite comparing DPAI against legacy All-to-LLM      |
 | `discord_bot.py`   | Discord bot with rich embeds, mobile-optimized cards, and remote ops (Docker/Git)       |
 | `.env.example`     | Template for API keys                                                                   |
 
@@ -87,8 +89,15 @@ pip install typesafe-sdk
 
 cp .env.example .env    # add GEMINI_API_KEY, and TYPESAFE_API_KEY if you have one
 
-python router.py
-python discord_bot.py
+# Interactive Demo (Zero dependencies, instant experience)
+uv run python demo_cli.py
+
+# Benchmark (Measures cost & latency reduction)
+uv run python benchmark.py
+
+# Run bot or router
+uv run python router.py
+uv run python discord_bot.py
 ```
 
 Hook configuration for AI coding agents:
