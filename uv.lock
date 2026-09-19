@@ -577,9 +577,9 @@ wheels = [
 ]
 
 [[package]]
-name = "dual-process-ai"
-version = "0.1.0"
-source = { virtual = "." }
+name = "dpai"
+version = "0.2.0"
+source = { editable = "." }
 dependencies = [
     { name = "discord-py" },
     { name = "google-genai" },
