@@ -28,8 +28,12 @@ load_dotenv(dotenv_path=Path(__file__).parent / ".env")
 
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")
 
-from router import DualProcessRouter
-from hermes_gate import HermesSafetyGate
+try:
+    from dpai import DualProcessRouter, HermesSafetyGate
+except ImportError:
+    from router import DualProcessRouter
+    from hermes_gate import HermesSafetyGate
+
 
 # =============================================================================
 # Configuration
