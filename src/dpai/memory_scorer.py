@@ -35,18 +35,102 @@ class JevMemoryScorer:
             except Exception:
                 self.client = None
 
+    STOP_WORDS = {
+        "a", "an", "the", "in", "on", "at", "to", "for", "of", "with", "by",
+        "from", "is", "are", "was", "were", "and", "or", "it", "this", "that",
+        "be", "as", "how", "what", "which", "who", "when", "where", "why",
+        "の", "に", "は", "を", "た", "が", "で", "て", "と", "し", "れ", "さ",
+        "ある", "いる", "も", "する", "から", "な", "こと", "として",
+    }
+
+    def _stem_word(self, word: str) -> set[str]:
+        """Generate common inflection stems for English words (<0.001ms)."""
+        stems = set()
+        if len(word) <= 2:
+            return stems
+
+        # Plural / 3rd person singular -s, -es, -ies
+        if word.endswith("ies") and len(word) >= 5:
+            stems.add(word[:-3] + "y")
+        elif word.endswith("es") and len(word) >= 4:
+            stems.add(word[:-2])
+            stems.add(word[:-1])
+        elif word.endswith("s") and not word.endswith("ss") and len(word) >= 3:
+            stems.add(word[:-1])
+
+        # Past tense / participle -ed
+        if word.endswith("ed") and len(word) >= 4:
+            stems.add(word[:-2])
+            stems.add(word[:-1])  # e.g. separated -> separate
+
+        # Continuous -ing
+        if word.endswith("ing") and len(word) >= 5:
+            stems.add(word[:-3])
+            stems.add(word[:-3] + "e")  # e.g. parsing -> parse
+
+        # Common suffixes
+        if word.endswith("tion") and len(word) >= 6:
+            stems.add(word[:-4])
+            stems.add(word[:-4] + "te")
+        elif word.endswith("ly") and len(word) >= 4:
+            stems.add(word[:-2])
+
+        return stems
+
     def _tokenize(self, text: str) -> set[str]:
-        """Simple, fast tokenizer for Japanese and English words."""
+        """
+        Fast sub-millisecond tokenizer:
+        - Normalizes punctuation, hyphens, and slashes into word separators
+        - Generates raw words, stemmed variants, and Japanese 2-grams
+        """
         if not text:
             return set()
-        # Extract alphanumeric words and Japanese token chunks
-        words = re.findall(r'[a-zA-Z0-9_\-]+|[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]+', text.lower())
-        return set(words)
+
+        # Split on any non-alphanumeric except CJK characters
+        normalized = re.sub(r'[\-_/\\.,;:!?()[\]{}<>"\'`|#*~+=\n\r\t]', ' ', text.lower())
+        raw_words = re.findall(r'[a-zA-Z0-9]+|[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]+', normalized)
+
+        tokens = set()
+        for w in raw_words:
+            if not w:
+                continue
+            tokens.add(w)
+
+            # English stems
+            if re.match(r'^[a-zA-Z]+$', w):
+                tokens.update(self._stem_word(w))
+            # CJK bigrams for substring matching
+            elif len(w) >= 2:
+                for i in range(len(w) - 1):
+                    tokens.add(w[i:i+2])
+
+        return tokens
+
+    CONCEPT_MAP = {
+        "安全": {"safety", "guard", "prevent", "block", "secure", "safe"},
+        "危険": {"danger", "risk", "harm", "malicious", "catastrophic"},
+        "対策": {"solution", "rule", "guard", "protection"},
+        "性能": {"performance", "latency", "throughput", "speed"},
+        "速度": {"speed", "latency", "fast", "throughput"},
+        "高速": {"fast", "speed", "latency"},
+        "設計": {"architecture", "design", "structure"},
+        "構造": {"architecture", "structure", "design"},
+        "アーキテクチャ": {"architecture", "design"},
+        "パフォーマンス": {"performance", "speed", "latency"},
+        "セキュリティ": {"security", "safety"},
+        "フラグ": {"flag", "flags"},
+        "シェル": {"shell", "bash", "command"},
+        "テスト": {"test", "benchmark", "suite"},
+        "ベンチマーク": {"benchmark", "throughput", "latency"},
+        "ループ": {"loop", "continuous", "daemon"},
+        "同期": {"sync", "synchronization", "push"},
+        "メモリ": {"memory", "scorer", "ram"},
+    }
 
     def calculate_score(self, query: str, episode: Dict[str, Any]) -> float:
         """
-        Calculate relevance score (0.0 to 1.0) between query and an episode.
-        Latency: < 0.1ms (local fallback) or fast RLCD API.
+        Calculate relevance score (0.0 to 1.0) between query and an episode/principle.
+        Latency: < 0.05ms.
         """
         if not query or not episode:
             return 0.0
@@ -76,35 +160,51 @@ class JevMemoryScorer:
         if not query_tokens:
             return 0.0
 
-        target_text = " ".join([
-            str(episode.get("task", "")),
-            str(episode.get("solution_summary", "")),
-            str(episode.get("error_experienced", "") or ""),
-            str(episode.get("tags", "") or ""),
-            str(episode.get("project_name", "") or ""),
-        ])
-        target_tokens = self._tokenize(target_text)
-        if not target_tokens:
-            return 0.0
+        # Query Expansion: cross-lingual concept mapping (Japanese -> English principles)
+        expanded_tokens = set(query_tokens)
+        for jp_key, en_set in self.CONCEPT_MAP.items():
+            if jp_key in query:
+                expanded_tokens.update(en_set)
 
-        # Jaccard / Overlap coefficient with priority weighting for task match
-        intersection = query_tokens & target_tokens
+        # Filter query tokens excluding stop words for meaningful matching
+        content_query = {t for t in expanded_tokens if t not in self.STOP_WORDS and len(t) >= 2}
+        effective_query = content_query if content_query else query_tokens
+
+        # Extract target tokens from different fields
+        task_tokens = self._tokenize(str(episode.get("task", "")))
+        rule_tokens = self._tokenize(str(episode.get("solution_summary", "") or episode.get("actionable_rule", "")))
+        domain_str = str(episode.get("domain", "") or episode.get("tags", "")).lower()
+        domain_tokens = self._tokenize(domain_str)
+        extra_tokens = self._tokenize(" ".join([
+            str(episode.get("error_experienced", "") or ""),
+            str(episode.get("project_name", "") or ""),
+        ]))
+
+        all_target_tokens = task_tokens | rule_tokens | domain_tokens | extra_tokens
+
+        intersection = effective_query & all_target_tokens
         if not intersection:
             return 0.0
 
-        task_tokens = self._tokenize(str(episode.get("task", "")))
-        task_match_count = len(query_tokens & task_tokens)
+        # Overlap ratio relative to content query
+        base_overlap = len(intersection) / max(len(effective_query), 1)
 
-        # Base overlap ratio
-        overlap_score = len(intersection) / len(query_tokens)
+        # Domain boost: if user query specifically matches the domain (e.g. "safety", "architecture")
+        domain_match = len(effective_query & domain_tokens) > 0
+        domain_boost = 0.25 if domain_match else 0.0
 
-        # Boost if task itself matches directly
-        task_boost = (task_match_count / len(query_tokens)) * 0.3
+        # Actionable Rule / Solution boost: matching the concrete rule
+        rule_match_count = len(effective_query & rule_tokens)
+        rule_boost = (rule_match_count / max(len(effective_query), 1)) * 0.35
 
-        # Status boost: successful episodes get slight preference
+        # Task / Lesson boost
+        task_match_count = len(effective_query & task_tokens)
+        task_boost = (task_match_count / max(len(effective_query), 1)) * 0.20
+
+        # Status boost
         status_boost = 0.05 if episode.get("status") == "success" else 0.0
 
-        total_score = min(1.0, round(overlap_score * 0.7 + task_boost + status_boost, 3))
+        total_score = min(1.0, round(base_overlap * 0.45 + domain_boost + rule_boost + task_boost + status_boost, 3))
         return total_score
 
     def rank_and_filter(
@@ -136,3 +236,80 @@ class JevMemoryScorer:
             ep["score_latency_ms"] = elapsed_ms
 
         return top_k
+
+    def find_relevant_principles(
+        self,
+        query: str,
+        principles: Optional[List[Dict[str, Any]]] = None,
+        principles_path: Optional[str] = None,
+        threshold: float = 0.2,
+        limit: int = 3
+    ) -> List[Dict[str, Any]]:
+        """
+        Reflexively find accumulated evolved principles relevant to the given query.
+        Latency: < 0.1ms.
+        """
+        if principles is None:
+            principles = load_evolved_principles(principles_path)
+        if not principles:
+            return []
+        return self.rank_and_filter(query, principles, threshold=threshold, limit=limit)
+
+
+def parse_evolved_principles(markdown_text: str) -> List[Dict[str, Any]]:
+    """
+    Parse EVOLVED_PRINCIPLES.md format into a list of structured principle dicts.
+    """
+    if not markdown_text:
+        return []
+
+    pattern = re.compile(
+        r'###\s+🧬\s+Evolved\s+Principle\s+\[(.*?)\]\s*\n'
+        r'-\s+\*\*Domain\*\*:\s*`?(.*?)`?\s*\n'
+        r'-\s+\*\*Lesson\*\*:\s*(.*?)\s*\n'
+        r'-\s+\*\*Actionable Rule\*\*:\s*(.*?)\s*\n'
+        r'-\s+\*\*Confidence Impact\*\*:\s*(.*?)\s*(?:\n---|\Z)',
+        re.DOTALL
+    )
+
+    principles = []
+    for match in pattern.finditer(markdown_text):
+        ts, domain, lesson, rule, conf_impact = match.groups()
+        rule_clean = rule.strip().strip('*').strip()
+        principles.append({
+            "timestamp": ts.strip(),
+            "domain": domain.strip(),
+            "lesson": lesson.strip(),
+            "actionable_rule": rule_clean,
+            "confidence_impact": conf_impact.strip(),
+            # Compatibility fields for JevMemoryScorer
+            "task": f"[{domain.strip()}] {lesson.strip()}",
+            "solution_summary": rule_clean,
+            "tags": domain.strip(),
+            "status": "success",
+        })
+    return principles
+
+
+def load_evolved_principles(file_path: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    Load and parse evolved principles from EVOLVED_PRINCIPLES.md file.
+    """
+    if file_path is None:
+        # Default to repo root EVOLVED_PRINCIPLES.md
+        file_path = Path(__file__).resolve().parent.parent.parent / "EVOLVED_PRINCIPLES.md"
+        if not file_path.exists():
+            # Try current directory
+            file_path = Path("EVOLVED_PRINCIPLES.md")
+    else:
+        file_path = Path(file_path)
+
+    if not file_path.exists():
+        return []
+
+    try:
+        content = file_path.read_text(encoding="utf-8")
+        return parse_evolved_principles(content)
+    except Exception:
+        return []
+

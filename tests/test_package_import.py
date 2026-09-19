@@ -28,6 +28,12 @@ def test_package_version_and_exports():
     assert check_command_safe is not None
     assert MCPToolPruner is not None
     assert JevMemoryScorer is not None
+    assert dpai.HabituationEngine is not None
+    assert dpai.RoutingDecision is not None
+    assert dpai.ProcessResult is not None
+    assert dpai.SQLiteEpisodicMemory is not None
+    assert dpai.BinaryActionPacket is not None
+    assert dpai.BitwiseLatentMatcher is not None
 
 
 def test_package_safety_gate():

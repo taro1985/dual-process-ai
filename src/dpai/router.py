@@ -14,6 +14,7 @@ import sys
 import re
 import time
 from pathlib import Path
+from typing import Optional, Any, Dict, List, Tuple
 from dotenv import load_dotenv
 
 load_dotenv(dotenv_path=Path(__file__).parent / ".env")
@@ -46,6 +47,90 @@ except ImportError:
         HAS_PRUNER = True
     except ImportError:
         HAS_PRUNER = False
+
+
+# Continual Learning / Episodic Principles Feedback (System 3 -> System 1)
+try:
+    from .memory_scorer import JevMemoryScorer, load_evolved_principles
+    HAS_MEMORY_SCORER = True
+except ImportError:
+    try:
+        from memory_scorer import JevMemoryScorer, load_evolved_principles
+        HAS_MEMORY_SCORER = True
+    except ImportError:
+        HAS_MEMORY_SCORER = False
+
+# Habituation Engine (System 2 -> System 1 Compilation)
+try:
+    from .habituation import HabituationEngine
+    HAS_HABITUATION = True
+except ImportError:
+    try:
+        from habituation import HabituationEngine
+        HAS_HABITUATION = True
+    except ImportError:
+        HAS_HABITUATION = False
+
+# Type-Safe Pydantic Data Models (Phase 3)
+try:
+    from .models import RoutingDecision, ProcessResult
+    HAS_MODELS = True
+except ImportError:
+    try:
+        from models import RoutingDecision, ProcessResult
+        HAS_MODELS = True
+    except ImportError:
+        HAS_MODELS = False
+
+# Binary-Native Protocol & Bitwise Latent Matcher
+try:
+    from .binary_protocol import (
+        BinaryActionPacket,
+        BitwiseLatentMatcher,
+        ACTION_GET_STATUS,
+        ACTION_DOCKER_STATUS,
+        ACTION_DOCKER_RESTART,
+        ACTION_GIT_PULL,
+        ACTION_LIST_REPOS,
+        ACTION_LIST_FILES,
+        ACTION_NOTIFY,
+        ACTION_HABIT_REFLEX,
+        ACTION_SAFETY_BLOCKED,
+        ACTION_ESCALATE_S2,
+        ACTION_TO_NAME,
+        NAME_TO_ACTION,
+        FLAG_SAFETY_BLOCKED,
+        FLAG_HABIT_HIT,
+        FLAG_AMBIGUITY_PENALTY,
+        FLAG_FALLBACK_ACTIVE,
+    )
+    HAS_BINARY_PROTOCOL = True
+except ImportError:
+    try:
+        from binary_protocol import (
+            BinaryActionPacket,
+            BitwiseLatentMatcher,
+            ACTION_GET_STATUS,
+            ACTION_DOCKER_STATUS,
+            ACTION_DOCKER_RESTART,
+            ACTION_GIT_PULL,
+            ACTION_LIST_REPOS,
+            ACTION_LIST_FILES,
+            ACTION_NOTIFY,
+            ACTION_HABIT_REFLEX,
+            ACTION_SAFETY_BLOCKED,
+            ACTION_ESCALATE_S2,
+            ACTION_TO_NAME,
+            NAME_TO_ACTION,
+            FLAG_SAFETY_BLOCKED,
+            FLAG_HABIT_HIT,
+            FLAG_AMBIGUITY_PENALTY,
+            FLAG_FALLBACK_ACTIVE,
+        )
+        HAS_BINARY_PROTOCOL = True
+    except ImportError:
+        HAS_BINARY_PROTOCOL = False
+
 
 
 
@@ -109,14 +194,36 @@ class JevClassifier:
         },
     }
 
-    def __init__(self):
+    def __init__(self, habit_engine: Optional[Any] = None):
         self.client = None
+        self.habit_engine = habit_engine
         if HAS_TYPESAFE and TYPESAFE_API_KEY:
             self.client = TypeSafeClient(api_key=TYPESAFE_API_KEY)
 
     def classify(self, user_input: str) -> dict:
         """Classify user intent in sub-millisecond time."""
         start = time.perf_counter()
+
+        # Helper to return RoutingDecision or dict
+        def make_decision(data: dict) -> Any:
+            if HAS_MODELS:
+                return RoutingDecision(**data)
+            return data
+
+        # Check Habituation Engine first (Learned S1 Reflexes, < 0.05ms)
+        if self.habit_engine:
+            matched_habit = self.habit_engine.match(user_input, threshold=0.65)
+            if matched_habit:
+                elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
+                return make_decision({
+                    "source": "Habituation Engine (Learned S1 Reflex)",
+                    "action": matched_habit.get("action", "habituated_response"),
+                    "confidence": matched_habit.get("confidence", 0.96),
+                    "urgency": 1,
+                    "habit_response": matched_habit.get("response", ""),
+                    "is_habituated": True,
+                    "latency_ms": elapsed_ms,
+                })
 
         # Try Jev API first (if available)
         if self.client:
@@ -133,13 +240,13 @@ class JevClassifier:
                 )
                 conf_score = round(res.answers.confidence.value / 100.0, 2)
                 elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
-                return {
+                return make_decision({
                     "source": "Jev API (TypeSafe AI)",
                     "action": res.answers.action.value,
                     "confidence": conf_score,
                     "urgency": res.answers.urgency.value,
                     "latency_ms": elapsed_ms,
-                }
+                })
             except Exception as e:
                 print(f"[Jev API fallback: {e}]", file=sys.stderr)
 
@@ -148,23 +255,68 @@ class JevClassifier:
         for rule in self.ROUTING_RULES.values():
             if any(kw in prompt_lower for kw in rule["keywords"]):
                 elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
-                return {
+                return make_decision({
                     "source": "Jev Classifier (keyword fallback)",
                     "action": rule["action"],
                     "confidence": 0.95,
                     "urgency": 1,
                     "latency_ms": elapsed_ms,
-                }
+                })
 
         # Default: escalate to System 2
         elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
-        return {
+        return make_decision({
             "source": "Jev Classifier (keyword fallback)",
             "action": "llm_reasoning",
             "confidence": 0.20,
             "urgency": 1,
             "latency_ms": elapsed_ms,
-        }
+        })
+
+
+class System1_5FallbackReasoner:
+    """
+    System 1.5: Offline & Quota-Resistant Rule-Based Reasoner.
+    
+    Triggered when System 2 encounters rate limits (429 RESOURCE_EXHAUSTED)
+    or network errors. Formulates structured guidance based on recalled principles
+    and intent heuristics without relying on external cloud APIs.
+    """
+
+    @staticmethod
+    def fallback_reason(user_input: str, principles: list = None, error_context: str = "") -> str:
+        prompt_lower = user_input.lower()
+        parts = ["⚠️ [System 1.5 Fallback Active: Gemini Quota/Offline Mode]"]
+
+        # 1. Concrete intent-based heuristic recommendation
+        action_guide = None
+        if any(w in prompt_lower for w in ["port", "ポート", "network", "ネット"]):
+            action_guide = "推奨アクション（ポート・ネットワーク確認）:\n- リッスン中ポート: `sudo ss -tulpn`\n- 接続状況: `ss -s`"
+        elif any(w in prompt_lower for w in ["git", "push", "remote", "リポジトリ"]):
+            action_guide = "推奨アクション（Gitリポジトリ操作）:\n- 状態確認: `git status`\n- リモート同期: `git push private <branch>`"
+        elif any(w in prompt_lower for w in ["docker", "container", "コンテナ"]):
+            action_guide = "推奨アクション（Docker操作）:\n- コンテナ一覧: `docker ps`\n- ログ確認: `docker logs <container_id>`"
+        elif any(w in prompt_lower for w in ["cpu", "memory", "メモリ", "負荷", "load"]):
+            action_guide = "推奨アクション（システム負荷確認）:\n- メモリ: `free -h`\n- CPU/プロセス: `top -b -n 1 | head -15`"
+
+        if action_guide:
+            parts.append(action_guide)
+
+        # 2. Integrate recalled principles as safety / architecture guardrails
+        if principles:
+            rules = [f"- {p}" for p in principles if p]
+            if rules:
+                parts.append("関連する蓄積原則（Evolved Principles）に基づくガイダンス:")
+                parts.extend(rules)
+
+        if len(parts) == 1:
+            # Default fallback when no specific heuristic or principle matched
+            parts.append(
+                f"リクエスト '{user_input}' は深層推論（System 2）が必要ですが、現在外部LLM APIが一時利用制限中です。\n"
+                f"ローカルSystem 1反射およびキャッシュは正常稼働しています。"
+            )
+
+        return "\n".join(parts)
 
 
 class GeminiReasoner:
@@ -268,6 +420,11 @@ class DualProcessRouter:
         threshold: float = 0.85,
         use_adaptive_threshold: bool = True,
         mcp_tools: list = None,
+        principles_path: str = None,
+        load_principles: bool = True,
+        enable_habituation: bool = True,
+        habit_persistence_path: str = None,
+        habit_engine: Any = None,
     ):
         """
         Args:
@@ -276,8 +433,22 @@ class DualProcessRouter:
             threshold: Default calibrated confidence threshold (0.0 - 1.0).
             use_adaptive_threshold: If True, dynamically adjusts threshold based on action risk & input ambiguity.
             mcp_tools: Optional catalog of available MCP tool definitions for dynamic pruning.
+            principles_path: Path to EVOLVED_PRINCIPLES.md (System 3 memory).
+            load_principles: If True, loads and utilizes accumulated evolved principles.
+            enable_habituation: If True, compiles successful System 2 reasoning into System 1 reflexes.
+            habit_persistence_path: Path to persist habituation rules JSON.
+            habit_engine: Optional existing HabituationEngine instance.
         """
-        self.system1 = JevClassifier()
+        # S2 -> S1 Habituation Engine
+        self.enable_habituation = enable_habituation
+        if habit_engine is not None:
+            self.habit_engine = habit_engine
+        elif enable_habituation and HAS_HABITUATION:
+            self.habit_engine = HabituationEngine(persistence_path=habit_persistence_path)
+        else:
+            self.habit_engine = None
+
+        self.system1 = JevClassifier(habit_engine=self.habit_engine)
         self.classifier = self.system1  # Convenient alias
         self.system2 = GeminiReasoner(system_instruction=system_instruction)
         self.tool_handlers = tool_handlers or {}
@@ -285,9 +456,114 @@ class DualProcessRouter:
         self.use_adaptive_threshold = use_adaptive_threshold
         self.mcp_tools = mcp_tools or []
 
+        # System 3 -> System 1/2 Closed Feedback Loop
+        self.memory_scorer = JevMemoryScorer() if HAS_MEMORY_SCORER else None
+        self.principles = []
+        if load_principles and HAS_MEMORY_SCORER:
+            self.principles = load_evolved_principles(principles_path)
+
+        # Binary-Native Bitwise Latent Matcher
+        self.binary_matcher = BitwiseLatentMatcher() if HAS_BINARY_PROTOCOL else None
+
     def classify(self, user_input: str) -> dict:
         """Convenient shortcut to classify input directly via System 1."""
         return self.system1.classify(user_input)
+
+    def classify_packet(self, user_input: str) -> Any:
+        """
+        Classify input directly into a 16-byte fixed-size binary packet.
+        Latency: < 0.01ms (Zero string-formatting overhead).
+        """
+        if not HAS_BINARY_PROTOCOL:
+            raise RuntimeError("Binary protocol is not available.")
+
+        # 1. Fast Bitwise Latent Matching for Habits
+        flags = 0
+        latent_hash = BitwiseLatentMatcher.compute_simhash(user_input)
+        if self.binary_matcher:
+            habit_hit = self.binary_matcher.match_fast(user_input)
+            if habit_hit:
+                return BinaryActionPacket(
+                    action_code=ACTION_HABIT_REFLEX,
+                    confidence=habit_hit.get("similarity_score", 0.96),
+                    flags=FLAG_HABIT_HIT,
+                    latent_hash=latent_hash,
+                )
+
+        # 2. System 1 Reflex
+        decision = self.system1.classify(user_input)
+        action_name = decision.get("action", "llm_reasoning")
+        action_code = NAME_TO_ACTION.get(action_name, ACTION_ESCALATE_S2)
+        confidence = decision.get("confidence", 0.0)
+
+        # 3. Check Ambiguity Patterns
+        for pattern in self.AMBIGUITY_PATTERNS:
+            if re.search(pattern, user_input, re.IGNORECASE):
+                flags |= FLAG_AMBIGUITY_PENALTY
+                break
+
+        return BinaryActionPacket(
+            action_code=action_code,
+            confidence=confidence,
+            flags=flags,
+            latent_hash=latent_hash,
+        )
+
+    def process_binary(self, packet_bytes: bytes) -> bytes:
+        """
+        Process a 16-byte raw binary packet and return a 16-byte response packet.
+        Eliminates human text/JSON IPC overhead entirely.
+        """
+        if not HAS_BINARY_PROTOCOL:
+            raise RuntimeError("Binary protocol is not available.")
+
+        in_packet = BinaryActionPacket.unpack(packet_bytes)
+        action_code = in_packet.action_code
+        confidence = in_packet.confidence
+        flags = in_packet.flags
+
+        # If already classified as habit or safe fast path
+        effective_threshold = self.threshold
+        if flags & FLAG_AMBIGUITY_PENALTY:
+            effective_threshold = min(0.99, effective_threshold + 0.10)
+
+        out_action_code = action_code
+        out_flags = flags
+
+        if confidence >= effective_threshold and action_code != ACTION_ESCALATE_S2:
+            # S1 Reflex execution permitted
+            out_flags &= ~FLAG_FALLBACK_ACTIVE
+        else:
+            # Escalate to System 2
+            out_action_code = ACTION_ESCALATE_S2
+
+        out_packet = BinaryActionPacket(
+            action_code=out_action_code,
+            confidence=confidence,
+            flags=out_flags,
+            latent_hash=in_packet.latent_hash,
+        )
+        return out_packet.pack()
+
+    def habituate(self, query: str, response: str, confidence: float = 0.96) -> dict:
+        """Manually or explicitly habituate a query-response pair into System 1."""
+        res = {}
+        if self.habit_engine:
+            res = self.habit_engine.habituate(query, response, confidence=confidence)
+        if self.binary_matcher:
+            self.binary_matcher.register_habit(query, response)
+        return res
+
+    def get_habits(self) -> list:
+        """Get all learned habit rules."""
+        return self.habit_engine.habits if self.habit_engine else []
+
+    def clear_habits(self) -> None:
+        """Clear all learned habits."""
+        if self.habit_engine:
+            self.habit_engine.clear()
+        if self.binary_matcher:
+            self.binary_matcher.fingerprints.clear()
 
     def get_adaptive_threshold(self, action: str, user_input: str) -> tuple[float, str]:
         """
@@ -314,7 +590,8 @@ class DualProcessRouter:
 
     def process(self, user_input: str, conversation_history: list = None) -> dict:
         """
-        Process a user request through the dual-process pipeline with adaptive calibration.
+        Process a user request through the dual-process pipeline with adaptive calibration,
+        closed-loop continual learning from evolved principles, and S2 -> S1 habituation.
         """
         total_start = time.perf_counter()
 
@@ -323,11 +600,47 @@ class DualProcessRouter:
         action = decision["action"]
         confidence = decision.get("confidence", 0.0)
         system2_engaged = False
+        is_fallback = False
         output = ""
+
+        # Check if already habituated (Learned S1 Reflex: < 0.05ms)
+        if decision.get("is_habituated"):
+            output = decision.get("habit_response", "")
+            total_ms = round((time.perf_counter() - total_start) * 1000, 2)
+            res_data = {
+                "input": user_input,
+                "decision": decision,
+                "confidence": confidence,
+                "threshold": self.threshold,
+                "risk_level": "habituated_reflex",
+                "system2_engaged": False,
+                "is_habituated": True,
+                "is_fallback": False,
+                "pruned_tools": [],
+                "principles": [],
+                "total_latency_ms": total_ms,
+                "output": output,
+            }
+            if HAS_MODELS:
+                return ProcessResult(**res_data)
+            return res_data
+
+        # System 3 -> System 1: Check for relevant evolved principles (< 0.05ms)
+        relevant_principles = []
+        if self.memory_scorer and self.principles:
+            relevant_principles = self.memory_scorer.find_relevant_principles(
+                user_input, principles=self.principles, threshold=0.15, limit=2
+            )
 
         # Determine effective threshold (Adaptive vs Static)
         if self.use_adaptive_threshold:
             effective_threshold, risk_level = self.get_adaptive_threshold(action, user_input)
+            # If safety principle matches, raise threshold defensively
+            for p in relevant_principles:
+                if p.get("domain") == "safety" or "raises" in p.get("confidence_impact", "").lower():
+                    effective_threshold = min(0.99, round(effective_threshold + 0.05, 2))
+                    risk_level += " (evolved safety guard)"
+                    break
         else:
             effective_threshold = self.threshold
             risk_level = "fixed"
@@ -341,24 +654,59 @@ class DualProcessRouter:
                 output = f"Tool execution error: {e}"
 
         else:
-            # --- System 2: Escalate to deep reasoning (with dynamic tool pruning) ---
+            # --- System 2: Escalate to deep reasoning (with dynamic tool pruning & evolved principles context) ---
             system2_engaged = True
-            output = self.system2.generate(user_input, conversation_history, tools=self.mcp_tools)
+            augmented_history = list(conversation_history) if conversation_history else []
+            if relevant_principles:
+                rules_text = "\n".join([f"- [{p.get('domain')}]: {p.get('actionable_rule')}" for p in relevant_principles])
+                guidance = f"[Accumulated Wisdom / Evolved Principles]:\n{rules_text}\nApply these rules strictly."
+                augmented_history.append({"role": "user", "parts": [guidance]})
+                augmented_history.append({"role": "model", "parts": ["Understood. I will strictly apply these evolved principles."]})
+
+            output = self.system2.generate(user_input, augmented_history, tools=self.mcp_tools)
+
+            # System 1.5 Fallback: If LLM is unavailable (429 / quota / offline), use local rule-based reasoner
+            is_fallback = False
+            if not output or output.startswith("LLM temporarily unavailable") or output.startswith("Error:"):
+                is_fallback = True
+                output = System1_5FallbackReasoner.fallback_reason(
+                    user_input,
+                    principles=[p.get("actionable_rule") for p in relevant_principles],
+                    error_context=output,
+                )
+
+            # Auto-Habituation: Compile successful resolution into System 1 habit rule
+            if not is_fallback and self.enable_habituation and self.habit_engine:
+                if output and len(output) > 5:
+                    self.habit_engine.habituate(
+                        query=user_input,
+                        response=output,
+                        action="habituated_response",
+                        confidence=0.96,
+                    )
 
         total_ms = round((time.perf_counter() - total_start) * 1000, 2)
         pruned_tool_names = [t.get("name") for t in getattr(self.system2, "last_pruned_tools", []) if isinstance(t, dict)]
+        principle_rules = [p.get("actionable_rule") for p in relevant_principles]
 
-        return {
+        res_data = {
             "input": user_input,
             "decision": decision,
             "confidence": confidence,
             "threshold": effective_threshold,
             "risk_level": risk_level,
             "system2_engaged": system2_engaged,
+            "is_habituated": False,
+            "is_fallback": is_fallback,
             "pruned_tools": pruned_tool_names,
+            "principles": principle_rules,
             "total_latency_ms": total_ms,
             "output": output,
         }
+
+        if HAS_MODELS:
+            return ProcessResult(**res_data)
+        return res_data
 
 
 # =============================================================================
