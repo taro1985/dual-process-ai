@@ -11,6 +11,7 @@ Architecture:
 
 import os
 import sys
+import re
 import time
 from pathlib import Path
 from dotenv import load_dotenv
@@ -35,6 +36,14 @@ try:
 except ImportError:
     HAS_GENAI = False
 
+# Dynamic MCP Tool Pruning (System 1)
+try:
+    from tool_pruner import MCPToolPruner
+    HAS_PRUNER = True
+except ImportError:
+    HAS_PRUNER = False
+
+
 
 class JevClassifier:
     """
@@ -51,40 +60,47 @@ class JevClassifier:
                          "コンテナ再起動", "コンテナリスタート", "コンテナの再起動"],
             "action": "docker_restart",
             "needs_reasoning": False,
+            "risk_level": "medium",
         },
         "docker_status": {
             "keywords": ["docker", "container", "コンテナ", "コンテナ一覧", "docker ps"],
             "action": "docker_status",
             "needs_reasoning": False,
+            "risk_level": "low",
         },
         "git_pull": {
             "keywords": ["git pull", "プル", "リポジトリ更新", "コード最新化", "pull origin"],
             "action": "git_pull",
             "needs_reasoning": False,
+            "risk_level": "medium",
         },
         "status": {
             "keywords": ["server", "status", "cpu", "memory", "disk", "uptime",
                          "サーバー", "ステータス", "メモリ", "スペック"],
             "action": "get_status",
             "needs_reasoning": False,
+            "risk_level": "low",
         },
         "repos": {
             "keywords": ["github", "repo", "repository", "commit",
                          "リポジトリ", "コミット"],
             "action": "list_repos",
             "needs_reasoning": False,
+            "risk_level": "low",
         },
         "files": {
             "keywords": ["drive", "file", "folder", "gdrive",
                          "ドライブ", "ファイル"],
             "action": "list_files",
             "needs_reasoning": False,
+            "risk_level": "low",
         },
         "notify": {
             "keywords": ["discord", "notify", "send", "alert",
                          "通知", "送信", "連絡"],
             "action": "send_notification",
             "needs_reasoning": False,
+            "risk_level": "medium",
         },
     }
 
@@ -156,16 +172,29 @@ class GeminiReasoner:
 
     MODELS = ["gemini-3.8-flash", "gemini-3.5-flash-lite"]
 
-    def __init__(self, system_instruction: str = None):
+    def __init__(self, system_instruction: str = None, enable_tool_pruning: bool = True):
         self.client = genai.Client(api_key=GEMINI_API_KEY) if HAS_GENAI and GEMINI_API_KEY else None
         self.system_instruction = system_instruction or (
             "You are a helpful AI assistant. Respond concisely and accurately."
         )
+        self.enable_tool_pruning = enable_tool_pruning
+        self.pruner = MCPToolPruner() if HAS_PRUNER else None
+        self.last_pruned_tools = []
 
-    def generate(self, user_input: str, conversation_history: list = None) -> str:
-        """Generate a response using Gemini with optional conversation context."""
+    def generate(self, user_input: str, conversation_history: list = None, tools: list = None) -> str:
+        """Generate a response using Gemini with optional conversation context and dynamic tool pruning."""
+        self.last_pruned_tools = []
         if not self.client:
             return "Error: GEMINI_API_KEY is not configured."
+
+        # Dynamically prune tools using System 1 (<0.1ms)
+        genai_tools = None
+        if tools and self.pruner and self.enable_tool_pruning:
+            self.last_pruned_tools = self.pruner.prune(user_input, tools, top_k=3, min_score=0.15)
+            if self.last_pruned_tools:
+                genai_tools = self.pruner.to_genai_function_declarations(self.last_pruned_tools)
+        elif tools:
+            self.last_pruned_tools = tools
 
         # Build multi-turn context
         contents = []
@@ -182,14 +211,16 @@ class GeminiReasoner:
         ))
 
         # Try primary model, fallback to lite
+        config_kwargs = {"system_instruction": self.system_instruction}
+        if genai_tools:
+            config_kwargs["tools"] = genai_tools
+
         for model_name in self.MODELS:
             try:
                 resp = self.client.models.generate_content(
                     model=model_name,
                     contents=contents,
-                    config=types.GenerateContentConfig(
-                        system_instruction=self.system_instruction,
-                    )
+                    config=types.GenerateContentConfig(**config_kwargs)
                 )
                 return resp.text
             except Exception as e:
@@ -201,46 +232,78 @@ class GeminiReasoner:
 
 class DualProcessRouter:
     """
-    Unified orchestrator combining System 1 (Jev) + System 2 (Gemini).
+    Unified orchestrator combining System 1 (Jev) + System 2 (Gemini) with Adaptive Thresholds.
     
     Usage:
-        router = DualProcessRouter(threshold=0.85)
+        router = DualProcessRouter(use_adaptive_threshold=True)
         result = router.process("What's the server status?")
-        # → System 1, confidence 0.95 >= 0.85, direct execution ($0)
+        # → Low-risk read operation, threshold 0.70, System 1 direct execution ($0)
         
-        result = router.process("Design a microservice architecture for this")
-        # → confidence 0.20 < 0.85 → escalated to System 2
+        result = router.process("docker restart vaio-mcp かも")
+        # → Medium-risk modification + ambiguity penalty → threshold 0.99 → escalated to System 2
     """
 
-    def __init__(self, tool_handlers: dict = None, system_instruction: str = None, threshold: float = 0.85):
+    RISK_THRESHOLDS = {
+        "low": 0.70,       # Read-only inspection (status, docker ps, repos, files)
+        "medium": 0.90,    # State-changing operations (docker restart, git pull, notify)
+        "high": 0.95,      # High-risk, unknown, or destructive actions
+    }
+
+    # Indicators of hesitation, uncertainty, or ambiguity that raise the escalation threshold
+    AMBIGUITY_PATTERNS = [
+        r'\b(?:maybe|perhaps|probably|not sure|wondering|might)\b',
+        r'(?:かも|かな|たぶん|どうだろう|かしら|っけ|じゃない|？|\?)',
+    ]
+
+    def __init__(
+        self,
+        tool_handlers: dict = None,
+        system_instruction: str = None,
+        threshold: float = 0.85,
+        use_adaptive_threshold: bool = True,
+        mcp_tools: list = None,
+    ):
         """
         Args:
             tool_handlers: Dict mapping action names to callable functions.
-                           e.g. {"get_status": my_status_func, "list_repos": my_repos_func}
             system_instruction: Custom system prompt for the Gemini reasoner.
-            threshold: Calibrated confidence threshold (0.0 - 1.0).
-                       If confidence >= threshold, System 1 decides and executes.
-                       Otherwise, escalates to System 2 (Gemini).
+            threshold: Default calibrated confidence threshold (0.0 - 1.0).
+            use_adaptive_threshold: If True, dynamically adjusts threshold based on action risk & input ambiguity.
+            mcp_tools: Optional catalog of available MCP tool definitions for dynamic pruning.
         """
         self.system1 = JevClassifier()
         self.system2 = GeminiReasoner(system_instruction=system_instruction)
         self.tool_handlers = tool_handlers or {}
         self.threshold = threshold
+        self.use_adaptive_threshold = use_adaptive_threshold
+        self.mcp_tools = mcp_tools or []
+
+    def get_adaptive_threshold(self, action: str, user_input: str) -> tuple[float, str]:
+        """
+        Calculate calibrated threshold based on action risk level and input ambiguity.
+
+        Returns:
+            (effective_threshold: float, risk_level: str)
+        """
+        # Determine risk level
+        risk = "high"
+        for rule in self.system1.ROUTING_RULES.values():
+            if rule.get("action") == action:
+                risk = rule.get("risk_level", "low")
+                break
+
+        base_threshold = self.RISK_THRESHOLDS.get(risk, self.threshold)
+
+        # Ambiguity penalty: if input indicates uncertainty, raise threshold to favor System 2
+        for pattern in self.AMBIGUITY_PATTERNS:
+            if re.search(pattern, user_input, re.IGNORECASE):
+                return min(0.99, round(base_threshold + 0.10, 2)), f"{risk} (ambiguity penalty)"
+
+        return base_threshold, risk
 
     def process(self, user_input: str, conversation_history: list = None) -> dict:
         """
-        Process a user request through the dual-process pipeline.
-        
-        Returns:
-            {
-                "input": str,
-                "decision": { ... System 1 classification ... },
-                "confidence": float,
-                "threshold": float,
-                "system2_engaged": bool,
-                "total_latency_ms": float,
-                "output": str,
-            }
+        Process a user request through the dual-process pipeline with adaptive calibration.
         """
         total_start = time.perf_counter()
 
@@ -251,8 +314,15 @@ class DualProcessRouter:
         system2_engaged = False
         output = ""
 
+        # Determine effective threshold (Adaptive vs Static)
+        if self.use_adaptive_threshold:
+            effective_threshold, risk_level = self.get_adaptive_threshold(action, user_input)
+        else:
+            effective_threshold = self.threshold
+            risk_level = "fixed"
+
         # Routing decision: confidence >= threshold -> System 1, else escalate
-        if confidence >= self.threshold and action != "llm_reasoning" and action in self.tool_handlers:
+        if confidence >= effective_threshold and action != "llm_reasoning" and action in self.tool_handlers:
             # Direct tool execution (no LLM needed)
             try:
                 output = self.tool_handlers[action](user_input)
@@ -260,18 +330,21 @@ class DualProcessRouter:
                 output = f"Tool execution error: {e}"
 
         else:
-            # --- System 2: Escalate to deep reasoning ---
+            # --- System 2: Escalate to deep reasoning (with dynamic tool pruning) ---
             system2_engaged = True
-            output = self.system2.generate(user_input, conversation_history)
+            output = self.system2.generate(user_input, conversation_history, tools=self.mcp_tools)
 
         total_ms = round((time.perf_counter() - total_start) * 1000, 2)
+        pruned_tool_names = [t.get("name") for t in getattr(self.system2, "last_pruned_tools", []) if isinstance(t, dict)]
 
         return {
             "input": user_input,
             "decision": decision,
             "confidence": confidence,
-            "threshold": self.threshold,
+            "threshold": effective_threshold,
+            "risk_level": risk_level,
             "system2_engaged": system2_engaged,
+            "pruned_tools": pruned_tool_names,
             "total_latency_ms": total_ms,
             "output": output,
         }

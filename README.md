@@ -72,6 +72,7 @@ Degraded mode is not an equivalent System 1. It produces no calibrated confidenc
 | `safety_gate.py`   | PreToolUse hook for AI coding agents — blocks dangerous shell commands before execution |
 | `hermes_gate.py`   | Autonomous agent integration hook for HermesAgent command execution loops               |
 | `memory_scorer.py` | Sub-millisecond episodic memory & context relevance scorer (JevMemoryScorer)            |
+| `tool_pruner.py`   | Sub-millisecond dynamic MCP tool selector / pruner for token efficiency & accuracy    |
 | `discord_bot.py`   | Discord bot with rich embeds, mobile-optimized cards, and remote ops (Docker/Git)       |
 | `.env.example`     | Template for API keys                                                                   |
 
