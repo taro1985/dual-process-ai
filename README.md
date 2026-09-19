@@ -1,5 +1,8 @@
 # 🧠⚡ Dual-Process AI
 
+[![CI](https://github.com/taro1985/dual-process-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/taro1985/dual-process-ai/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+
 Route cheap decisions to a calibrated classifier. Send only the hard ones to an LLM.
 
 > "Don't send everything to an LLM. Fast brain decides, deep brain thinks."

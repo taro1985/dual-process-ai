@@ -77,7 +77,14 @@ def inspect_command(cmd: str) -> dict:
     if FORK_BOMB in cmd:
         return {"decision": "deny", "reason": "⚡ [Jev Guard] Fork bomb detected."}
 
-    # 2. Regex pattern matching (sub-millisecond)
+    # 2. Catastrophic root deletion check (handles separated flags: rm -r -f /, rm -rf /*, rm --recursive --force /)
+    if re.search(r'\brm\b', cmd):
+        has_recursive = bool(re.search(r'-(?:[a-zA-Z]*r|-[a-zA-Z]*recursive)', cmd))
+        has_root_target = bool(re.search(r'(?:\s+)(?:/|/\*|/\s*$|/(\s+|$))', cmd))
+        if has_recursive and has_root_target:
+            return {"decision": "deny", "reason": "⚡ [Jev Guard] Catastrophic root deletion detected."}
+
+    # 3. Regex pattern matching (sub-millisecond)
     for pattern, description in HARD_BLOCK_PATTERNS:
         if re.search(pattern, cmd):
             return {"decision": "deny", "reason": f"⚡ [Jev Guard] {description}"}

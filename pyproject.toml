@@ -1,0 +1,33 @@
+[project]
+name = "dual-process-ai"
+version = "0.1.0"
+description = "A design pattern combining System 1 (Jev) with System 2 (Gemini) — inspired by Kahneman's Thinking, Fast and Slow"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "taro1985" }
+]
+dependencies = [
+    "google-genai>=1.0.0",
+    "discord-py>=2.3.2",
+    "python-dotenv>=1.0.1",
+    "psutil>=6.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+]
+typesafe = [
+    "typesafe-sdk>=0.7.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
