@@ -15,14 +15,14 @@ Most AI applications send every request to a large language model — including 
 
 Dual-Process AI splits the work along the lines Kahneman drew:
 
-| | System 1 (Fast) | System 2 (Slow) |
-|---|---|---|
-| **Kahneman** | Intuitive, automatic | Deliberate, analytical |
-| **Implementation** | [Jev](https://typesafe.ai) (TypeSafe AI) | Gemini 3.8 Flash |
-| **Output** | Typed decision + confidence | Free-form text |
-| **Latency** | ~70–500 ms | 500–5000 ms |
-| **Input cost** | $0.042 / 1M tokens (output free) | Standard token pricing |
-| **Use case** | Routing, classification, safety gates | Reasoning, code generation, analysis |
+|                    | System 1 (Fast)                          | System 2 (Slow)                      |
+| ------------------ | ---------------------------------------- | ------------------------------------ |
+| **Kahneman**       | Intuitive, automatic                     | Deliberate, analytical               |
+| **Implementation** | [Jev](https://typesafe.ai) (TypeSafe AI) | Gemini 3.8 Flash                     |
+| **Output**         | Typed decision + confidence              | Free-form text                       |
+| **Latency**        | ~70–500 ms                               | 500–5000 ms                          |
+| **Input cost**     | $0.042 / 1M tokens (output free)         | Standard token pricing               |
+| **Use case**       | Routing, classification, safety gates    | Reasoning, code generation, analysis |
 
 The key mechanism is not speed — it is **calibrated confidence**.
 
@@ -66,12 +66,14 @@ Degraded mode is not an equivalent System 1. It produces no calibrated confidenc
 
 ## 📦 What's Included
 
-| File | Description |
-|---|---|
-| `router.py` | Core router — System 1 classifies and scores, System 2 reasons |
-| `safety_gate.py` | PreToolUse hook for AI coding agents — blocks dangerous shell commands before execution |
-| `discord_bot.py` | Discord bot with rich embeds and short-term per-channel context |
-| `.env.example` | Template for API keys |
+| File               | Description                                                                             |
+| ------------------ | --------------------------------------------------------------------------------------- |
+| `router.py`        | Core router — System 1 classifies and scores, System 2 reasons                          |
+| `safety_gate.py`   | PreToolUse hook for AI coding agents — blocks dangerous shell commands before execution |
+| `hermes_gate.py`   | Autonomous agent integration hook for HermesAgent command execution loops               |
+| `memory_scorer.py` | Sub-millisecond episodic memory & context relevance scorer (JevMemoryScorer)            |
+| `discord_bot.py`   | Discord bot with rich embeds, mobile-optimized cards, and remote ops (Docker/Git)       |
+| `.env.example`     | Template for API keys                                                                   |
 
 ---
 
@@ -154,11 +156,11 @@ Routing a command through Jev raises the ceiling — TypeSafe's own demos cover 
 
 Measured on a Sony VAIO, 2 cores, 3.7 GB RAM — the point being that the fast path needs no local GPU and no local model.
 
-| Metric | System 1 only | Escalated |
-|---|---|---|
-| **Latency (keyword, degraded)** | 0.01–0.05 ms | 500–5000 ms |
-| **Latency (Jev)** | 70–500 ms | + 500–5000 ms |
-| **RAM** | ~50 MB | ~50 MB |
+| Metric                          | System 1 only | Escalated     |
+| ------------------------------- | ------------- | ------------- |
+| **Latency (keyword, degraded)** | 0.01–0.05 ms  | 500–5000 ms   |
+| **Latency (Jev)**               | 70–500 ms     | + 500–5000 ms |
+| **RAM**                         | ~50 MB        | ~50 MB        |
 
 Routing accuracy is the metric that matters, and it is not measured yet. Latency and cost numbers are meaningless on their own: a router that answers instantly and answers wrong is worse than no router. The numbers this project needs, and does not yet have:
 
@@ -178,7 +180,7 @@ Model routing and cascading are established ideas — RouteLLM, semantic-router,
 
 ## 🤝 Credits
 
-- Kahneman, D. (2011). *Thinking, Fast and Slow*
+- Kahneman, D. (2011). _Thinking, Fast and Slow_
 - [TypeSafe AI / Jev](https://typesafe.ai) — System 1 classifier
 - [Google Gemini](https://ai.google.dev) — System 2 reasoning
 

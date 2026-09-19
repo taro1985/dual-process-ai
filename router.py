@@ -46,6 +46,22 @@ class JevClassifier:
 
     # Customize these routing rules for your use case
     ROUTING_RULES = {
+        "docker_restart": {
+            "keywords": ["docker restart", "restart container",
+                         "コンテナ再起動", "コンテナリスタート", "コンテナの再起動"],
+            "action": "docker_restart",
+            "needs_reasoning": False,
+        },
+        "docker_status": {
+            "keywords": ["docker", "container", "コンテナ", "コンテナ一覧", "docker ps"],
+            "action": "docker_status",
+            "needs_reasoning": False,
+        },
+        "git_pull": {
+            "keywords": ["git pull", "プル", "リポジトリ更新", "コード最新化", "pull origin"],
+            "action": "git_pull",
+            "needs_reasoning": False,
+        },
         "status": {
             "keywords": ["server", "status", "cpu", "memory", "disk", "uptime",
                          "サーバー", "ステータス", "メモリ", "スペック"],

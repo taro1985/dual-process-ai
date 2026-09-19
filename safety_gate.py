@@ -55,7 +55,7 @@ HARD_BLOCK_PATTERNS = [
      "Direct block device overwrite detected."),
 
     # Secret exfiltration via pipe
-    (r'\b(id_rsa|id_ed25519|/etc/shadow)\b.*\|\s*(curl|wget|nc|ncat)\b',
+    (r'(?:id_rsa|id_ed25519|/etc/shadow).*?\|\s*(?:curl|wget|nc|ncat)\b',
      "Secret key exfiltration attempt detected."),
 ]
 
