@@ -13,8 +13,15 @@ for p in [str(root_dir), str(bot_dir)]:
     if p not in sys.path:
         sys.path.insert(0, p)
 
+import pytest
 from hermes_gate import HermesSafetyGate, check_command_safe
-from tools.sandbox_tools import SandboxTools
+
+try:
+    from tools.sandbox_tools import SandboxTools
+    HAS_BOT = True
+except ImportError:
+    HAS_BOT = False
+
 
 
 def test_hermes_safety_gate_blocks_dangerous_commands():
@@ -49,6 +56,7 @@ def test_hermes_safety_gate_allows_safe_commands():
         assert reason == ""
 
 
+@pytest.mark.skipif(not HAS_BOT, reason="HermesAgent bot tools not installed on this host")
 def test_sandbox_tools_blocks_execution_before_run(tmp_path):
     tools = SandboxTools(workspace_dir=tmp_path)
     res = tools.run_shell("rm -rf /")
@@ -57,8 +65,10 @@ def test_sandbox_tools_blocks_execution_before_run(tmp_path):
     assert "Blocked by System 1 Safety Gate" in res.error
 
 
+@pytest.mark.skipif(not HAS_BOT, reason="HermesAgent bot tools not installed on this host")
 def test_sandbox_tools_runs_safe_command(tmp_path):
     tools = SandboxTools(workspace_dir=tmp_path)
     res = tools.run_shell("echo 'safety verified'")
     assert res.success
     assert "safety verified" in res.output
+

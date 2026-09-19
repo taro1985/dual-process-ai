@@ -13,8 +13,15 @@ for p in [str(root_dir), str(bot_dir)]:
     if p not in sys.path:
         sys.path.insert(0, p)
 
+import pytest
 from memory_scorer import JevMemoryScorer
-from memory.sqlite_memory import HermesMemoryDB, Episode
+
+try:
+    from memory.sqlite_memory import HermesMemoryDB, Episode
+    HAS_BOT = True
+except ImportError:
+    HAS_BOT = False
+
 
 
 def test_jev_memory_scorer_relevant_episode():
@@ -78,6 +85,7 @@ def test_jev_memory_scorer_rank_and_filter():
     assert ranked[0]["score_latency_ms"] < 5.0  # Fast sub-millisecond execution
 
 
+@pytest.mark.skipif(not HAS_BOT, reason="HermesAgent bot memory not installed on this host")
 def test_sqlite_memory_integration(tmp_path):
     db_file = tmp_path / "test_hermes_memory.db"
     mem_db = HermesMemoryDB(db_file)
