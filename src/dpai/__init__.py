@@ -9,7 +9,7 @@ Inspired by Daniel Kahneman's "Thinking, Fast and Slow".
 """
 
 from .router import DualProcessRouter, JevClassifier, GeminiReasoner
-from .safety_gate import inspect_command
+from .safety_gate import inspect_command, inspect_file_write
 from .hermes_gate import HermesSafetyGate, check_command_safe
 from .tool_pruner import MCPToolPruner
 from .memory_scorer import JevMemoryScorer, parse_evolved_principles, load_evolved_principles
@@ -25,6 +25,7 @@ __all__ = [
     "GeminiReasoner",
     "HermesSafetyGate",
     "inspect_command",
+    "inspect_file_write",
     "check_command_safe",
     "MCPToolPruner",
     "JevMemoryScorer",

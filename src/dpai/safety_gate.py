@@ -62,6 +62,34 @@ HARD_BLOCK_PATTERNS = [
 # Fork bomb (literal string match)
 FORK_BOMB = ':(){:|:&};:'
 
+# Critical file patterns — prevent accidental overwrite of system files or secret keys
+CRITICAL_FILE_PATTERNS = [
+    (r'^/etc/(passwd|shadow|sudoers|sudoers\.d/|pam\.d/|fstab)', "Direct modification of /etc system configuration is blocked."),
+    (r'^/boot/', "Direct modification of /boot is blocked."),
+    (r'^/dev/(sd[a-z]|nvme|zero|null|urandom|random)', "Direct modification of device special files is blocked."),
+    (r'^/proc/|^/sys/', "Direct modification of kernel procfs/sysfs is blocked."),
+    (r'^/(usr/)?(s?bin)/', "Direct modification of system binaries is blocked."),
+    (r'(\.ssh/(id_[a-zA-Z0-9_]+|authorized_keys))$', "Modification of private SSH keys or authorized_keys is blocked."),
+    (r'\.gnupg/(secring|private-keys-v1\.d)', "Modification of GPG private keyrings is blocked."),
+]
+
+
+def inspect_file_write(file_path: str) -> dict:
+    """
+    Inspect a file path for dangerous write or overwrite operations.
+    Runs in < 0.005ms (sub-microsecond).
+    """
+    if not file_path:
+        return {"decision": "allow"}
+
+    norm_path = os.path.normpath(os.path.expanduser(file_path))
+
+    for pattern, description in CRITICAL_FILE_PATTERNS:
+        if re.search(pattern, norm_path):
+            return {"decision": "deny", "reason": f"⚡ [Jev Guard] {description}"}
+
+    return {"decision": "allow"}
+
 
 def inspect_command(cmd: str) -> dict:
     """
@@ -141,6 +169,10 @@ def main():
         if tool_name == "run_command":
             cmd = args.get("CommandLine", "")
             result = inspect_command(cmd)
+            print(json.dumps(result))
+        elif tool_name in ("write_to_file", "replace_file_content"):
+            target_file = args.get("TargetFile", "")
+            result = inspect_file_write(target_file)
             print(json.dumps(result))
         else:
             print(json.dumps({"decision": "allow"}))

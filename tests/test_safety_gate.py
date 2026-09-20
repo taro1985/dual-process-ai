@@ -44,3 +44,42 @@ def test_safety_gate_allows_safe_commands():
     for cmd in safe_cmds:
         res = inspect_command(cmd)
         assert res["decision"] == "allow", f"False positive on safe command: {cmd}"
+
+
+def test_safety_gate_blocks_critical_file_overwrite():
+    from safety_gate import inspect_file_write
+
+    dangerous_files = [
+        "/etc/passwd",
+        "/etc/shadow",
+        "/etc/sudoers",
+        "/boot/vmlinuz",
+        "/dev/sda",
+        "/dev/nvme0n1",
+        "~/.ssh/id_rsa",
+        "~/.ssh/id_ed25519",
+        "~/.ssh/authorized_keys",
+        "/home/taro/.ssh/id_rsa",
+        "~/.gnupg/secring.gpg",
+        "/usr/bin/python3",
+    ]
+    for path in dangerous_files:
+        res = inspect_file_write(path)
+        assert res["decision"] == "deny", f"Failed to deny file write: {path}"
+        assert "⚡ [Jev Guard]" in res["reason"]
+
+
+def test_safety_gate_allows_safe_file_writes():
+    from safety_gate import inspect_file_write
+
+    safe_files = [
+        "/home/taro/dual-process-ai/README.md",
+        "/home/taro/dual-process-ai/src/dpai/router.py",
+        "./tests/test_safety_gate.py",
+        "/tmp/test_output.json",
+        "~/.gemini/config/scripts/test.sh",
+    ]
+    for path in safe_files:
+        res = inspect_file_write(path)
+        assert res["decision"] == "allow", f"False positive on safe file: {path}"
+
